@@ -30,3 +30,37 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python detector.py
+
+
+      - name: Probar notificacion Telegram
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          mensaje = "Sistema EV Multideporte: prueba de Telegram exitosa."
+
+          datos = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": mensaje
+          }).encode()
+
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          solicitud = urllib.request.Request(url, data=datos)
+
+          with urllib.request.urlopen(solicitud, timeout=20) as respuesta:
+              resultado = json.load(respuesta)
+              if not resultado.get("ok"):
+                  raise RuntimeError("Telegram no confirmo el envio")
+
+          print("Mensaje de prueba enviado correctamente")
+          PY
+          
