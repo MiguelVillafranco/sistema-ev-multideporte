@@ -3,12 +3,15 @@ name: Prueba detector EV
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 13 * * *'
 
 permissions:
   contents: read
 
 jobs:
   probar_detector:
+
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
