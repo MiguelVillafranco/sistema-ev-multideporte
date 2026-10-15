@@ -258,12 +258,9 @@ def ejecutar():
 
 
     # Cada ejecución crea observaciones fechadas; no son apuestas ejecutadas.
-    for inicio in range(0, len(observaciones), 100):
-            lote = [
-            {k: v for k, v in fila.items() if k != "deporte_alerta"}
-            for fila in observaciones[inicio:inicio + 100]
-        ]
-        supabase_post("oportunidades", lote)
+        for inicio in range(0, len(observaciones), 100):
+            lote = [{k: v for k, v in fila.items() if k != "deporte_alerta"} for fila in observaciones[inicio:inicio + 100]]
+            supabase_post("oportunidades", lote)
 
 
     # Enviar alertas de candidatas nuevas para revisión
