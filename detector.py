@@ -93,6 +93,27 @@ def supabase_post(tabla, registros, conflicto=None, devolver=False):
     )
     return resultado if devolver else len(registros)
 
+def enviar_alerta_telegram(mensaje):
+
+    
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("Telegram no configurado.")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    datos = urlencode({
+        "chat_id": chat_id,
+        "text": mensaje
+    }).encode("utf-8")
+
+    peticion_json(url, datos=datos, metodo="POST")
+    print("Alerta enviada a Telegram.")
+    return True
+
 
 def guardar_eventos(eventos, deporte):
     registros = []
