@@ -234,6 +234,75 @@ def ejecutar():
     for inicio in range(0, len(observaciones), 100):
         supabase_post("oportunidades", observaciones[inicio:inicio + 100])
 
+
+    # Enviar alertas de candidatas nuevas para revisión
+    for fila in observaciones:
+        if fila.get("decision") != "OBSERVADA":
+            continue
+
+        ev = fila.get("ev_porcentaje")
+        if ev is None or float(ev) <= UMBRAL_EV:
+            continue
+
+        mensaje = (
+            "🔎 CANDIDATA EV PARA REVISIÓN\n"
+            f"🏀 Deporte: {DEPORTE}\n"
+            f"📊 Selección: {fila['seleccion']}\n"
+            f"🏦 Casa: {fila.get('casa_apuestas')}\n"
+            f"💰 Cuota: {fila.get('cuota')}\n"
+            f"📈 EV estimado: {ev}%\n"
+            "⚠️ Estimación basada en cuotas de otras casas; "
+            "no es +EV confirmado.\n"
+            "🧪 Modalidad: simulada."
+        )
+
+    
+        import hashlib
+
+        clave = "|".join([
+            str(DEPORTE),
+            str(fila["evento_id"]),
+            str(fila["mercado"]),
+            str(fila["seleccion"]),
+            str(fila.get("casa_apuestas") or "")
+        ])
+        clave_alerta = hashlib.sha256(
+            clave.encode("utf-8")
+        ).hexdigest()
+
+        endpoint = (
+            SUPABASE_URL
+            + "/rest/v1/alertas_enviadas?"
+            + urlencode({
+                "select": "clave_alerta",
+                "clave_alerta": "eq." + clave_alerta
+            })
+        )
+
+        existentes = peticion_json(
+            endpoint,
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": "Bearer " + SUPABASE_KEY
+            }
+        )
+
+        if existentes:
+            print("Alerta ya registrada; se omite.")
+            continue
+
+        if enviar_alerta_telegram(mensaje):
+            supabase_post("alertas_enviadas", [{
+                "clave_alerta": clave_alerta,
+                "evento_id": fila["evento_id"],
+                "seleccion": fila["seleccion"],
+                "casa_apuestas": fila.get("casa_apuestas"),
+                "cuota": fila.get("cuota"),
+                "ev_porcentaje": fila.get("ev_porcentaje"),
+                "estado": "ENVIADA"
+            }])
+            
+    
     candidatas = sum(fila["decision"] == "OBSERVADA" for fila in observaciones)
     print("Observaciones guardadas:", len(observaciones))
     print("Candidatas para revision independiente:", candidatas)
