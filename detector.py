@@ -15,6 +15,35 @@ UMBRAL_EV = 3.0
 MIN_CASAS_REFERENCIA = 3
 
 
+def enviar_resumen_telegram(eventos, observaciones, candidatas):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        print("Telegram no configurado; se omite el resumen.")
+        return
+
+    mensaje = (
+        "📊 SISTEMA EV MULTIDEPORTE\n"
+        "🏀 Deporte: NBA (prueba)\n"
+        f"🏟️ Eventos analizados: {eventos}\n"
+        f"📋 Observaciones guardadas: {observaciones}\n"
+        f"🔎 Candidatas para revisión: {candidatas}\n"
+        "⚠️ Ninguna candidata es +EV confirmado.\n"
+        "🧪 Modalidad: simulación."
+    )
+
+    datos = urlencode({
+        "chat_id": chat_id,
+        "text": mensaje
+    }).encode("utf-8")
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    peticion_json(url, datos=datos, metodo="POST")
+    print("Resumen enviado a Telegram")
+
+
+
 def peticion_json(url, datos=None, headers=None, metodo=None):
     solicitud = Request(url, data=datos, headers=headers or {}, method=metodo)
     try:
@@ -190,5 +219,7 @@ def ejecutar():
     print("Ninguna candidata se considera +EV confirmado ni apuesta realizada.")
 
 
+    enviar_resumen_telegram(len(cuotas), len(observaciones), candidatas)
+    
 if __name__ == "__main__":
     ejecutar()
