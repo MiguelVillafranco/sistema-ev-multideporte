@@ -231,34 +231,54 @@ def analizar_evento(evento, evento_id):
 def ejecutar():
     print("Sistema EV Multideporte - prueba NBA")
     print("Consulta:", datetime.now(timezone.utc).isoformat())
-    cuotas = obtener_cuotas(DEPORTE)
-    print("Eventos encontrados:", len(cuotas))
-    mapa_ids = guardar_eventos(cuotas, DEPORTE)
-    print("Eventos registrados o actualizados:", len(mapa_ids))
+    
 
     observaciones = []
-    for evento in cuotas:
-        evento_id = mapa_ids.get(evento.get("id"))
-        if evento_id is not None:
-            observaciones.extend(analizar_evento(evento, evento_id))
+    total_eventos = 0
+
+    for deporte in DEPORTES_OBJETIVO[:MAX_DEPORTES_POR_EJECUCION]:
+        print("Consultando deporte:", deporte)
+
+        cuotas = obtener_cuotas(deporte)
+        print("Eventos encontrados:", len(cuotas))
+        total_eventos += len(cuotas)
+
+        mapa_ids = guardar_eventos(cuotas, deporte)
+        print("Eventos registrados o actualizados:", len(mapa_ids))
+
+        for evento in cuotas:
+            evento_id = mapa_ids.get(evento.get("id"))
+            if evento_id is not None:
+                registros = analizar_evento(evento, evento_id)
+
+                for fila in registros:
+                    fila["deporte_alerta"] = deporte
+
+                observaciones.extend(registros)
+
 
     # Cada ejecución crea observaciones fechadas; no son apuestas ejecutadas.
     for inicio in range(0, len(observaciones), 100):
-        supabase_post("oportunidades", observaciones[inicio:inicio + 100])
+            lote = [
+            {k: v for k, v in fila.items() if k != "deporte_alerta"}
+            for fila in observaciones[inicio:inicio + 100]
+        ]
+        supabase_post("oportunidades", lote)
 
 
     # Enviar alertas de candidatas nuevas para revisión
     for fila in observaciones:
         if fila.get("decision") != "OBSERVADA":
-            continue
+           continue
 
         ev = fila.get("ev_porcentaje")
         if ev is None or float(ev) <= UMBRAL_EV:
             continue
+    
 
         mensaje = (
             "🔎 CANDIDATA EV PARA REVISIÓN\n"
-            f"🏀 Deporte: {DEPORTE}\n"
+            f"🏟️ Deporte: {fila.get('deporte_alerta', DEPORTE)}\n"
             f"📊 Selección: {fila['seleccion']}\n"
             f"🏦 Casa: {fila.get('casa_apuestas')}\n"
             f"💰 Cuota: {fila.get('cuota')}\n"
