@@ -14,6 +14,18 @@ DEPORTE = "basketball_nba"  # Prueba controlada para limitar consumo de API
 UMBRAL_EV = 3.0
 MIN_CASAS_REFERENCIA = 3
 
+# Deportes para la prueba multideporte
+DEPORTES_OBJETIVO = [
+    "basketball_nba",
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "icehockey_nhl",
+    "americanfootball_nfl",
+]
+
+MAX_DEPORTES_POR_EJECUCION = 3
 
 def enviar_resumen_telegram(eventos, observaciones, candidatas):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
