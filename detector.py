@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 from datetime import datetime, timezone
 from statistics import median
 from urllib.request import urlopen, Request
@@ -10,11 +11,11 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 API_KEY = os.environ.get("ODDS_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-DEPORTE = "basketball_nba"  # Prueba controlada para limitar consumo de API
+
+DEPORTE = "basketball_nba"
 UMBRAL_EV = 3.0
 MIN_CASAS_REFERENCIA = 3
 
-# Deportes para la prueba multideporte
 DEPORTES_OBJETIVO = [
     "basketball_nba",
     "soccer_epl",
@@ -27,6 +28,13 @@ DEPORTES_OBJETIVO = [
 
 MAX_DEPORTES_POR_EJECUCION = 3
 
+CAMPOS_AUXILIARES_ALERTA = {
+    "deporte_alerta",
+    "partido_alerta",
+    "fecha_alerta",
+}
+
+
 def enviar_resumen_telegram(eventos, observaciones, candidatas):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -37,8 +45,8 @@ def enviar_resumen_telegram(eventos, observaciones, candidatas):
 
     mensaje = (
         "📊 SISTEMA EV MULTIDEPORTE\n"
-        "🏀 Deporte: NBA (prueba)\n"
-        f"🏟️ Eventos analizados: {eventos}\n"
+        "🏟️ Cobertura: multideporte\n"
+        f"🎟️ Eventos analizados: {eventos}\n"
         f"📋 Observaciones guardadas: {observaciones}\n"
         f"🔎 Candidatas para revisión: {candidatas}\n"
         "⚠️ Ninguna candidata es +EV confirmado.\n"
@@ -47,7 +55,7 @@ def enviar_resumen_telegram(eventos, observaciones, candidatas):
 
     datos = urlencode({
         "chat_id": chat_id,
-        "text": mensaje
+        "text": mensaje,
     }).encode("utf-8")
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -55,9 +63,14 @@ def enviar_resumen_telegram(eventos, observaciones, candidatas):
     print("Resumen enviado a Telegram")
 
 
-
 def peticion_json(url, datos=None, headers=None, metodo=None):
-    solicitud = Request(url, data=datos, headers=headers or {}, method=metodo)
+    solicitud = Request(
+        url,
+        data=datos,
+        headers=headers or {},
+        method=metodo,
+    )
+
     try:
         with urlopen(solicitud, timeout=30) as respuesta:
             contenido = respuesta.read()
@@ -70,28 +83,49 @@ def peticion_json(url, datos=None, headers=None, metodo=None):
 def consultar_api(ruta, parametros):
     if not API_KEY:
         raise RuntimeError("Falta ODDS_API_KEY")
+
     parametros = dict(parametros)
     parametros["apiKey"] = API_KEY
-    return peticion_json(BASE_URL + ruta + "?" + urlencode(parametros))
+
+    return peticion_json(
+        BASE_URL + ruta + "?" + urlencode(parametros)
+    )
 
 
 def obtener_cuotas(deporte):
-    return consultar_api(f"/sports/{deporte}/odds/", {
-        "regions": "us", "markets": "h2h", "oddsFormat": "decimal"
-    })
+    return consultar_api(
+        f"/sports/{deporte}/odds/",
+        {
+            "regions": "us",
+            "markets": "h2h",
+            "oddsFormat": "decimal",
+        },
+    )
 
 
 def supabase_post(tabla, registros, conflicto=None, devolver=False):
     if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY")
+        raise RuntimeError(
+            "Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY"
+        )
+
     if not registros:
         return [] if devolver else 0
+
     endpoint = SUPABASE_URL + "/rest/v1/" + tabla
+
     if conflicto:
-        endpoint += "?" + urlencode({"on_conflict": conflicto})
-    preferencias = ["return=representation" if devolver else "return=minimal"]
+        endpoint += "?" + urlencode({
+            "on_conflict": conflicto
+        })
+
+    preferencias = [
+        "return=representation" if devolver else "return=minimal"
+    ]
+
     if conflicto:
         preferencias.insert(0, "resolution=merge-duplicates")
+
     resultado = peticion_json(
         endpoint,
         datos=json.dumps(registros).encode("utf-8"),
@@ -103,11 +137,11 @@ def supabase_post(tabla, registros, conflicto=None, devolver=False):
         },
         metodo="POST",
     )
+
     return resultado if devolver else len(registros)
 
-def enviar_alerta_telegram(mensaje):
 
-    
+def enviar_alerta_telegram(mensaje):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -119,19 +153,22 @@ def enviar_alerta_telegram(mensaje):
 
     datos = urlencode({
         "chat_id": chat_id,
-        "text": mensaje
+        "text": mensaje,
     }).encode("utf-8")
 
     peticion_json(url, datos=datos, metodo="POST")
     print("Alerta enviada a Telegram.")
+
     return True
 
 
 def guardar_eventos(eventos, deporte):
     registros = []
+
     for evento in eventos:
         if not evento.get("id") or not evento.get("commence_time"):
             continue
+
         registros.append({
             "evento_externo_id": evento["id"],
             "deporte": deporte,
@@ -141,73 +178,141 @@ def guardar_eventos(eventos, deporte):
             "fecha_partido": evento["commence_time"],
             "estado": "PROGRAMADO",
         })
-    # Obtener identificadores internos para relacionar las observaciones.
+
     if not registros:
         return {}
-    supabase_post("eventos", registros, conflicto="deporte,evento_externo_id")
-    ids = [registro["evento_externo_id"] for registro in registros]
-    endpoint = SUPABASE_URL + "/rest/v1/eventos?" + urlencode({
-        "select": "id,evento_externo_id",
-        "deporte": "eq." + deporte,
-        "evento_externo_id": "in.(" + ",".join(ids) + ")",
-    })
-    filas = peticion_json(endpoint, headers={
-        "apikey": SUPABASE_KEY,
-        "Authorization": "Bearer " + SUPABASE_KEY,
-    })
-    return {fila["evento_externo_id"]: fila["id"] for fila in filas}
+
+    supabase_post(
+        "eventos",
+        registros,
+        conflicto="deporte,evento_externo_id",
+    )
+
+    ids = [
+        registro["evento_externo_id"]
+        for registro in registros
+    ]
+
+    endpoint = (
+        SUPABASE_URL
+        + "/rest/v1/eventos?"
+        + urlencode({
+            "select": "id,evento_externo_id",
+            "deporte": "eq." + deporte,
+            "evento_externo_id": "in.(" + ",".join(ids) + ")",
+        })
+    )
+
+    filas = peticion_json(
+        endpoint,
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": "Bearer " + SUPABASE_KEY,
+        },
+    )
+
+    return {
+        fila["evento_externo_id"]: fila["id"]
+        for fila in filas
+    }
 
 
 def extraer_casas(evento):
     casas = []
+
     for casa in evento.get("bookmakers", []):
         for mercado in casa.get("markets", []):
             if mercado.get("key") != "h2h":
                 continue
+
             precios = {}
+
             for seleccion in mercado.get("outcomes", []):
                 nombre = seleccion.get("name")
                 precio = seleccion.get("price")
-                if nombre and isinstance(precio, (int, float)) and precio > 1:
+
+                if (
+                    nombre
+                    and isinstance(precio, (int, float))
+                    and precio > 1
+                ):
                     precios[nombre] = float(precio)
+
             if len(precios) >= 2:
                 casas.append({
-                    "nombre": casa.get("title") or casa.get("key") or "Desconocida",
-                    "clave": casa.get("key") or casa.get("title") or "desconocida",
+                    "nombre": (
+                        casa.get("title")
+                        or casa.get("key")
+                        or "Desconocida"
+                    ),
+                    "clave": (
+                        casa.get("key")
+                        or casa.get("title")
+                        or "desconocida"
+                    ),
                     "precios": precios,
                 })
+
     return casas
 
 
 def analizar_evento(evento, evento_id):
     casas = extraer_casas(evento)
     registros = []
+
     for casa_objetivo in casas:
         for seleccion, cuota in casa_objetivo["precios"].items():
             probabilidades = []
+
             for referencia in casas:
                 if referencia["clave"] == casa_objetivo["clave"]:
-                    continue  # Evita estimar una cuota usando esa misma casa.
+                    continue
+
                 precios = referencia["precios"]
+
                 if seleccion not in precios:
                     continue
-                suma_implicitas = sum(1 / valor for valor in precios.values())
+
+                suma_implicitas = sum(
+                    1 / valor
+                    for valor in precios.values()
+                )
+
                 if suma_implicitas <= 0:
                     continue
-                probabilidades.append((1 / precios[seleccion]) / suma_implicitas)
 
-            probabilidad = median(probabilidades) if len(probabilidades) >= MIN_CASAS_REFERENCIA else None
+                probabilidades.append(
+                    (1 / precios[seleccion]) / suma_implicitas
+                )
+
+            if len(probabilidades) >= MIN_CASAS_REFERENCIA:
+                probabilidad = median(probabilidades)
+            else:
+                probabilidad = None
+
             implicita = 1 / cuota
-            ev = (probabilidad * cuota - 1) * 100 if probabilidad is not None else None
+
+            if probabilidad is not None:
+                ev = (probabilidad * cuota - 1) * 100
+            else:
+                ev = None
+
             if probabilidad is None:
                 decision = "RECHAZADA"
-                motivo = "Referencias insuficientes para estimar probabilidad"
+                motivo = (
+                    "Referencias insuficientes para estimar probabilidad"
+                )
             elif ev > UMBRAL_EV:
                 decision = "OBSERVADA"
-                motivo = "EV de consenso >3%; requiere validacion independiente"
+                motivo = (
+                    "EV de consenso >3%; "
+                    "requiere validacion independiente"
+                )
             else:
                 decision = "RECHAZADA"
-                motivo = "EV de consenso no supera el umbral de 3%"
+                motivo = (
+                    "EV de consenso no supera el umbral de 3%"
+                )
 
             registros.append({
                 "evento_id": evento_id,
@@ -215,67 +320,164 @@ def analizar_evento(evento, evento_id):
                 "seleccion": seleccion,
                 "casa_apuestas": casa_objetivo["nombre"],
                 "cuota": round(cuota, 4),
-                "probabilidad_estimada": round(probabilidad, 6) if probabilidad is not None else None,
+                "probabilidad_estimada": (
+                    round(probabilidad, 6)
+                    if probabilidad is not None
+                    else None
+                ),
                 "probabilidad_implicita": round(implicita, 6),
-                "ev_porcentaje": round(ev, 4) if ev is not None else None,
-                "incertidumbre": "ALTA: estimacion de consenso de mercado, no modelo independiente",
+                "ev_porcentaje": (
+                    round(ev, 4)
+                    if ev is not None
+                    else None
+                ),
+                "incertidumbre": (
+                    "ALTA: estimacion de consenso de mercado, "
+                    "no modelo independiente"
+                ),
                 "decision": decision,
                 "motivo_decision": motivo,
                 "fuente_cuota": "The Odds API v4",
-                "fuente_probabilidad": "Mediana de otras casas sin margen (The Odds API v4)" if probabilidad is not None else "Insuficiente",
+                "fuente_probabilidad": (
+                    "Mediana de otras casas sin margen "
+                    "(The Odds API v4)"
+                    if probabilidad is not None
+                    else "Insuficiente"
+                ),
                 "modalidad": "SIMULADA",
             })
+
     return registros
 
 
 def ejecutar():
-    print("Sistema EV Multideporte - prueba NBA")
-    print("Consulta:", datetime.now(timezone.utc).isoformat())
-    
+    print("Sistema EV Multideporte")
+    print(
+        "Consulta:",
+        datetime.now(timezone.utc).isoformat(),
+    )
 
     observaciones = []
     total_eventos = 0
+    deportes_consultados = 0
 
     for deporte in DEPORTES_OBJETIVO[:MAX_DEPORTES_POR_EJECUCION]:
         print("Consultando deporte:", deporte)
 
-        cuotas = obtener_cuotas(deporte)
-        print("Eventos encontrados:", len(cuotas))
+        try:
+            cuotas = obtener_cuotas(deporte)
+        except RuntimeError as error:
+            print(
+                f"No se pudo consultar {deporte}: {error}"
+            )
+            continue
+
+        deportes_consultados += 1
+
+        print(
+            "Eventos encontrados:",
+            len(cuotas),
+        )
+
         total_eventos += len(cuotas)
 
-        mapa_ids = guardar_eventos(cuotas, deporte)
-        print("Eventos registrados o actualizados:", len(mapa_ids))
+        mapa_ids = guardar_eventos(
+            cuotas,
+            deporte,
+        )
+
+        print(
+            "Eventos registrados o actualizados:",
+            len(mapa_ids),
+        )
 
         for evento in cuotas:
-            evento_id = mapa_ids.get(evento.get("id"))
-            if evento_id is not None:
-                registros = analizar_evento(evento, evento_id)
+            evento_id = mapa_ids.get(
+                evento.get("id")
+            )
 
-                for fila in registros:
-                    fila["deporte_alerta"] = deporte
+            if evento_id is None:
+                continue
 
-                observaciones.extend(registros)
+            registros = analizar_evento(
+                evento,
+                evento_id,
+            )
 
+            partido = (
+                f"{evento.get('away_team', 'Desconocido')} "
+                f"vs {evento.get('home_team', 'Desconocido')}"
+            )
 
-    # Cada ejecución crea observaciones fechadas; no son apuestas ejecutadas.
-        for inicio in range(0, len(observaciones), 100):
-            lote = [{k: v for k, v in fila.items() if k != "deporte_alerta"} for fila in observaciones[inicio:inicio + 100]]
-            supabase_post("oportunidades", lote)
+            fecha_partido = evento.get(
+                "commence_time"
+            )
 
+            for fila in registros:
+                fila["deporte_alerta"] = deporte
+                fila["partido_alerta"] = partido
+                fila["fecha_alerta"] = fecha_partido
 
-    # Enviar alertas de candidatas nuevas para revisión
+            observaciones.extend(registros)
+
+    print(
+        "Deportes consultados correctamente:",
+        deportes_consultados,
+    )
+
+    # Guardar observaciones en Supabase.
+    # Los campos *_alerta son auxiliares y no existen en la tabla.
+    for inicio in range(
+        0,
+        len(observaciones),
+        100,
+    ):
+        lote = []
+
+        for fila in observaciones[inicio:inicio + 100]:
+            registro_limpio = {
+                clave: valor
+                for clave, valor in fila.items()
+                if clave not in CAMPOS_AUXILIARES_ALERTA
+            }
+
+            lote.append(registro_limpio)
+
+        supabase_post(
+            "oportunidades",
+            lote,
+        )
+
+    # Enviar únicamente candidatas nuevas.
     for fila in observaciones:
         if fila.get("decision") != "OBSERVADA":
-           continue
+            continue
 
         ev = fila.get("ev_porcentaje")
+
         if ev is None or float(ev) <= UMBRAL_EV:
             continue
-    
+
+        deporte_alerta = fila.get(
+            "deporte_alerta",
+            DEPORTE,
+        )
+
+        partido_alerta = fila.get(
+            "partido_alerta",
+            "Partido no disponible",
+        )
+
+        fecha_alerta = fila.get(
+            "fecha_alerta",
+            "Fecha no disponible",
+        )
 
         mensaje = (
             "🔎 CANDIDATA EV PARA REVISIÓN\n"
-            f"🏟️ Deporte: {fila.get('deporte_alerta', DEPORTE)}\n"
+            f"🏟️ Deporte: {deporte_alerta}\n"
+            f"⚔️ Partido: {partido_alerta}\n"
+            f"🕒 Inicio: {fecha_alerta}\n"
             f"📊 Selección: {fila['seleccion']}\n"
             f"🏦 Casa: {fila.get('casa_apuestas')}\n"
             f"💰 Cuota: {fila.get('cuota')}\n"
@@ -285,16 +487,14 @@ def ejecutar():
             "🧪 Modalidad: simulada."
         )
 
-    
-        import hashlib
-
         clave = "|".join([
-            str(DEPORTE),
+            str(deporte_alerta),
             str(fila["evento_id"]),
             str(fila["mercado"]),
             str(fila["seleccion"]),
-            str(fila.get("casa_apuestas") or "")
+            str(fila.get("casa_apuestas") or ""),
         ])
+
         clave_alerta = hashlib.sha256(
             clave.encode("utf-8")
         ).hexdigest()
@@ -304,7 +504,7 @@ def ejecutar():
             + "/rest/v1/alertas_enviadas?"
             + urlencode({
                 "select": "clave_alerta",
-                "clave_alerta": "eq." + clave_alerta
+                "clave_alerta": "eq." + clave_alerta,
             })
         )
 
@@ -312,33 +512,58 @@ def ejecutar():
             endpoint,
             headers={
                 "apikey": SUPABASE_KEY,
-                "Authorization": "Bearer " + SUPABASE_KEY
-            }
+                "Authorization": "Bearer " + SUPABASE_KEY,
+            },
         )
 
         if existentes:
-            print("Alerta ya registrada; se omite.")
+            print(
+                "Alerta ya registrada; se omite:",
+                partido_alerta,
+                fila["seleccion"],
+            )
             continue
 
         if enviar_alerta_telegram(mensaje):
-            supabase_post("alertas_enviadas", [{
-                "clave_alerta": clave_alerta,
-                "evento_id": fila["evento_id"],
-                "seleccion": fila["seleccion"],
-                "casa_apuestas": fila.get("casa_apuestas"),
-                "cuota": fila.get("cuota"),
-                "ev_porcentaje": fila.get("ev_porcentaje"),
-                "estado": "ENVIADA"
-            }])
-            
-    
-    candidatas = sum(fila["decision"] == "OBSERVADA" for fila in observaciones)
-    print("Observaciones guardadas:", len(observaciones))
-    print("Candidatas para revision independiente:", candidatas)
-    print("Ninguna candidata se considera +EV confirmado ni apuesta realizada.")
+            supabase_post(
+                "alertas_enviadas",
+                [{
+                    "clave_alerta": clave_alerta,
+                    "evento_id": fila["evento_id"],
+                    "seleccion": fila["seleccion"],
+                    "casa_apuestas": fila.get("casa_apuestas"),
+                    "cuota": fila.get("cuota"),
+                    "ev_porcentaje": fila.get("ev_porcentaje"),
+                    "estado": "ENVIADA",
+                }],
+            )
+
+    candidatas = sum(
+        fila.get("decision") == "OBSERVADA"
+        for fila in observaciones
+    )
+
+    print(
+        "Observaciones guardadas:",
+        len(observaciones),
+    )
+
+    print(
+        "Candidatas para revision independiente:",
+        candidatas,
+    )
+
+    print(
+        "Ninguna candidata se considera +EV confirmado "
+        "ni apuesta realizada."
+    )
+
+    enviar_resumen_telegram(
+        total_eventos,
+        len(observaciones),
+        candidatas,
+    )
 
 
-    enviar_resumen_telegram(len(cuotas), len(observaciones), candidatas)
-    
 if __name__ == "__main__":
     ejecutar()
